@@ -1,0 +1,535 @@
+ZEP 1 - Zarr specification version 3
+====================================
+
+Authors:
+
+-  Alistair Miles (`@alimanfoo <https://github.com/alimanfoo%3E>`__),
+   Wellcome Sanger Institute
+
+-  Jonathan Striebel (`@jstriebel <https://github.com/jstriebel>`__),
+   Scalable Minds
+
+-  Jeremy Maitin-Shepard (`@jbms <https://github.com/jbms>`__), Google
+
+Status: Accepted via
+`zarr-developers/zarr-specs/#227 <https://github.com/zarr-developers/zarr-specs/issues/227>`__
+
+Type: Specification
+
+Created: 2022-05-23
+
+Accepted: 2023-05-15
+
+Discussion: https://github.com/orgs/zarr-developers/projects/2
+
+Abstract
+--------
+
+This ZEP proposes a new major version of the core specification which
+defines how to store and retrieve Zarr data. The ZEP also proposes a new
+framework for modularising specifications of codecs, storage systems and
+extensions.
+
+Motivation and Scope
+--------------------
+
+The Zarr specification version 2 [`ZARR2SPEC <#ref-ZARR2SPEC>`__]
+(hereafter “Zarr v2”) has been widely adopted and implemented in several
+programming languages. It has enabled the use of cloud and distributed
+computing to process a variety of large and challenging datasets,
+particularly in the scientific domain. It has also provided a vehicle
+for experimentation and innovation in the field of data storage for
+high-performance distributed computing.
+
+As usage of Zarr has grown and broadened, several limitations of Zarr v2
+have surfaced. These include:
+
+-  **Interoperability**. Zarr v2 has been implemented in Python, C, C++,
+   Julia, Java and JavaScript. However, there is not feature parity
+   across all implementations. Implementations are also not currently
+   available for some important languages, such as R. This is in part
+   because the Zarr v2 spec was originally developed together with the
+   Python implementation, which itself leans heavily on the use of NumPy
+   concepts and machinery. A more language-agnostic approach to the core
+   specification, together with some slimming down of the specification,
+   would help to achieve complete implementations with full
+   interoperobility across major programming languages.
+
+-  **Extensibility**. Zarr is increasingly being used for storage of
+   very large and keystone scientific datasets. If this trend continues,
+   interoperability and stability of the Zarr ecosystem will be vital,
+   to allow these datasets to be utilised to their full potential. At
+   the same time, large-scale array data storage is a very active area
+   of innovation, and there remain many opportunities to improve
+   performance, scalability and resilience for I/O-bound
+   high-performance distributed computing. To balance these demands for
+   stability and innovation, some framework for community exploration
+   and development of Zarr extensions is needed, so that innovation can
+   happen in a coordinated way with predictable consequences and
+   behaviour of implementations which may not support all extension
+   points.
+
+-  **High-latency storage**. Zarr v2 was originally developed to support
+   local file system storage. Because of this, the design of Zarr v2
+   implicitly made assumptions about the performance characteristics of
+   the underlying storage technology, such as low latency for storage
+   operations to list directories and check existence of files.
+   Fortunately, certain features of Zarr v2 still enabled other storage
+   systems to be used, such as cloud object stores, and this ability to
+   utilise a variety of different underlying storage systems has been
+   very valuable across a range of use cases. However, performance of
+   certain operations can degrade significantly with some storage
+   technologies, particularly systems with relatively high latency per
+   operation, such as cloud object stores. This limitation has been
+   worked around through the use of consolidated metadata, but this
+   workaround introduces other limitations, such as additional
+   complexity when adding or modifying data.
+
+-  **Storage layout flexibility**. Zarr v2 adopts a simple storage model
+   where each chunk is encoded and then written to a single storage
+   object. This simplicity makes implementation easier, but presents
+   some practical challenges. For example, for large datasets this can
+   generate a very large number of storage objects, which does not work
+   well for certain storage technologies. Also, this forces one
+   retrieval operation per chunk, which can be suboptimal where there
+   are many chunks that are often read together, and/or where different
+   access patterns need to be accommodated.
+
+These limitations have motivated the proposal described here to define a
+new major version of the Zarr core specification, together with a new
+modular specification framework.
+
+Normally, it is better to introduce changes in small pieces, allowing
+each to be evaluated and discussed in isolation. However, addressing the
+limitations described above could not be done without introducing
+backwards-incompatible changes into the core specification, and thus
+multiple such changes are combined here, in an attempt to minimise the
+overall disruption to the ecosystem and the community.
+
+Usage and Impact
+----------------
+
+This ZEP and the associated specifications have the following intended
+outcomes:
+
+1. Facilitate implementation of a core specification with feature parity
+   and full interoperability across all major programming languages.
+
+2. Accelerate innovation by facilitating the exploration, development,
+   implementation and evaluation of Zarr systems with support for novel
+   encoding technologies, storage technologies and features by a broader
+   community.
+
+3. Ensure reasonable performance characteristics of all Zarr
+   implementations across a variety of different underlying storage
+   technologies, including storage with high latency per operation.
+
+4. Improve the performance characteristics of Zarr implementations for
+   data with a very large number of chunks and/or with a variety of
+   common access patterns.
+
+Adopting this ZEP would have the following disruptive impacts on the
+members of the Zarr community:
+
+-  Effort and coordination would be required to implement the
+   specifications in all current Zarr software libraries and verify
+   interoperability.
+
+-  Effort would be required by data producers to migrate to generating
+   data conformant with the new specifications.
+
+-  Some effort may be required by users of Zarr data and/or Zarr
+   software libraries to learn about and understand the differences in
+   available features and/or how certain features are accessed.
+
+Backward Compatibility
+----------------------
+
+This ZEP introduces a Zarr core specification version 3, which is
+backwards-incompatible with the Zarr version 2 specification
+[`ZARR2SPEC <#ref-ZARR2SPEC>`__].
+
+Implementations of the Zarr version 3 core specification are not
+required to be able to read or write data conforming to the Zarr version
+2 specification, and vice versa.
+
+Zarr v2 datasets may be upgraded by only writing v3 metadata if their
+data-types and codecs are supported in v3.
+
+Detailed description
+--------------------
+
+Below is a summary of some of the key features of the proposed new
+specification and specification framework. Please see the specification
+drafts for further information, linked below in the specifications
+section.
+
+Modularity
+~~~~~~~~~~
+
+This ZEP proposes a modular specification framework, with the following
+components:
+
+-  `Zarr core
+   specification <https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html>`__
+   – This specification is the starting point for any Zarr
+   implementation. It defines in an abstract way a format for storing
+   N-dimensional array data.
+
+-  **Zarr extension point specifications** – This is an open-ended set
+   of specifications which add new features to and/or modify the Zarr
+   format in some way. There is a further breakdown of different
+   extension types, described in more detail below, covering data types,
+   codecs, and storage transformers.
+
+-  **Zarr store specifications** – This is an open-ended set of
+   specifications, each of which defines a mapping from the abstract
+   store API defined in the Zarr core specification to a set of concrete
+   operations for a specific storage technology, such as a file system
+   or cloud object storage.
+
+The primary goal of this modularity is to allow specifications of new
+extensions, codecs and stores to be added over time, without needing any
+change to the core specification.
+
+Note that the core specification allows for decentralised publishing of
+extension point and store specifications. In other words, any individual
+or organisation may publish such a specification. It is hoped that the
+majority of such specifications will be published on the zarr-specs
+website after a review process by the Zarr community, thus providing a
+common point of discovery and coordination across the community.
+However, we do not want to obstruct individuals or organisation who need
+to innovate or experiment or who have specialised needs which are better
+served by managing and publishing specifications in a different way.
+
+Note that we also anticipate that user groups from different domains may
+wish to publish **usage convention specifications**, by which we mean
+specifications that define conventions for the use of Zarr for a
+particular type of data, such as restrictions and expectations regarding
+the groups, arrays and attributes that will be found within a Zarr
+dataset. How these usage convention specifications will be managed,
+published and used is out of scope for this ZEP (see `ZEP
+4 <https://github.com/zarr-developers/zeps/pull/28>`__ instead).
+
+A draft of the Zarr version 3 core specification is available at the
+following URL:
+
+https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html
+
+Changes during the draft process of the spec and this ZEP are listed in
+the `change
+log <https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html#change-log>`__.
+
+Note publication of the draft specification on the zarr-specs website
+preceded establishiment of the ZEP process, and does not imply
+acceptance of this ZEP. The specification should be considered a
+proposal at this time, pending acceptance of this ZEP.
+
+Together with the core specification, this ZEP includes
+
+-  `Codecs <https://zarr-specs.readthedocs.io/en/latest/v3/codecs.html>`__
+   (blosc, gzip, endian, transpose)
+
+-  Stores - `File system
+   store <https://zarr-specs.readthedocs.io/en/latest/v3/stores/filesystem/v1.0.html>`__
+
+To illustrate the principle of the other specification types, the
+`sharding storage
+transformer <https://zarr-specs.readthedocs.io/en/latest/v3/array-storage-transformers/sharding/v1.0.html>`__
+specification has also been published on the zarr-specs website, but is
+still work in progress and not part of this ZEP, but part of
+`ZEP2 <https://zarr.dev/zeps/draft/ZEP0002.html>`__.
+
+Extensibility
+~~~~~~~~~~~~~
+
+This ZEP proposes a number of mechanisms by which the Zarr core protocol
+can be extended.
+
+In general, there are two different kinds of extensions.
+
+An extension may add new features to Zarr, in a way that does not
+invalidate or break any processing of Zarr data to which the extension
+applies by systems which do not implement the extension. In other words,
+the use of the extension may be safely ignored by systems which
+implement only the core specification.
+
+Alternatively, an extension may modify or override the Zarr core
+specification in some way, such that certain processing operations must
+be aware of and implement the extension, otherwise data will become
+corrupted or Zarr implementations will encounter unexpected errors. In
+other words, the use of such an extension must not be ignored by systems
+which implement only the core specification.
+
+If a Zarr system does not implement a given extension, the Zarr core
+specification describes the situations under which the extension can be
+ignored and processing can proceed, and conversely where the extension
+cannot be ignored and processing must terminate.
+
+The different kind of extension points are defined in the core spec:
+https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html#extension-points
+
+For each of these kinds of extensions, the core specification defines a
+mechanism by which the extension is declared in the metadata associated
+with a Zarr hierarchy or array, such that its use can be discovered by a
+Zarr implementation, without requiring any out-of-band communication. In
+other words, a system or user reading Zarr data should not need to
+“know” anything about the extensions that were used when the data were
+created, the data are fully self-describing.
+
+Scope reduction
+~~~~~~~~~~~~~~~
+
+In order to facilitate implementation of the core specification across
+different programming languages, the scope of the specification has been
+reduced relative to Zarr v2. Note in particular the following:
+
+-  The set of core data types is reduced relative to Zarr v2. Only fixed
+   size integer and floating point data types are defined, in addition
+   to a Boolean data type and a fixed length raw data type. Any data
+   types relating to storage of textual data have been left for
+   definition within an extension specification. The “object” data type,
+   which was never included within the Zarr v2 spec but which was
+   implemented in the Python implementation, is also not included – it
+   is suggested that a better approach be found for supporting variable
+   length data types, and defined within a data type extension
+   specification.
+
+Accommodating high-latency storage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With Zarr v2, certain operations that require access to metadata can be
+pathologically slow when running against data stored in a high-latency
+storage system such as a cloud object store. These include navigating
+the structure of a Zarr hierarchy, such as obtaining a list of the child
+nodes of any given node, or generating a textual representation of an
+entire hierarchy (e.g., as generated by the ``tree()`` function in the
+Zarr Python implementation). These operations are often required because
+it is a common use case for user to be interactively exploring the
+content of a Zarr hierarchy with which they are unfamiliar, and so poor
+performance seriously affects usability.
+
+A workaround for this with Zarr v2 has been the addition of consolidated
+metadata. This involves packaging all metadata for a hierarchy into a
+single storage object, which can then be read once. This is a workable
+solution in many situations, where data are written once and then read
+many times. However, it introduces some additional complexity for data
+managers, who need to ensure that consolidated metadata is generated,
+and then kept in sync with group and array metadata if there are any
+subsequent changes.
+
+The Zarr version 3 core specification redesigns the organisation of data
+and metadata objects within a Zarr store, in order to better accommodate
+high latency stores. While this does not completely remove the need for
+consolidated metadata in all current situations where that is used, it
+does vastly improve the performance of simple operations to explore the
+structure and content of a Zarr hierarchy.
+
+The new design leverages the fact that, although listing of objects in
+cloud object stores is still much slower than listing of files in a
+local file system, all major cloud stores support the ability to list
+objects with a given prefix, which can be used to reduce the size of the
+result set and usually returns much faster than listing an entire
+bucket. It also provides an opportunity to better leverage the support
+for emulating a directory listing, via providing both a “prefix” and a
+“delimiter” parameter. The new design separates the metadata and chunk
+data storage objects by adding a prefix to chunk data.
+
+The new design also changes the key suffix for metadata objects. For
+example, for an array with hierarchy path ``/foo/bar``, the key for the
+corresponding metadata object in Zarr v2 would be ``/foo/bar/.zarray``.
+In Zarr v3 this becomes ``/foo/bar/zarr.json``.
+
+Storage transformers
+~~~~~~~~~~~~~~~~~~~~
+
+In Zarr version 2, every transformation of the storage layout would need
+to be reflected in the core indexing implementation or as a separate
+storage. The first option needs changes in the core implementation and
+is not easily extensible, whereas the second option is more easily
+extensible. However, some mechanism only change the data layout and
+still need an underlying storage, which needs to be configurable as
+before.
+
+For those use-cases, a Zarr storage transformer as introduced in Zarr
+version 3 allows to change the zarr-compatible data in an intermediate
+step between the core indexing implementation and the storage layer.
+Data can be requested from the indexing implementation as before, and
+stored in any storage that could be configured beforehand, as the stored
+transformed data is restored to its original state whenever data is
+requested. To use multiple storage transformers, those may be stacked to
+combine different functionalities.
+
+One example extension that would be implemented as a storage transformer
+is the `sharding
+specification <https://zarr-specs.readthedocs.io/en/latest/v3/array-storage-transformers/sharding/v1.0.html>`__.
+Besides this, the following (non-exhaustive) list of concepts that might
+possibly be implemented as storage transformers:
+
+-  `Content-addressable storage
+   transformer <https://github.com/zarr-developers/zarr-specs/issues/82>`__
+-  `Sharding array chunks across hashed
+   sub-directories <https://github.com/zarr-developers/zarr-specs/issues/115>`__
+-  `Versioned
+   arrays <https://github.com/zarr-developers/zarr-specs/issues/76>`__
+-  `File chunk
+   store <https://github.com/zarr-developers/zarr-python/issues/556>`__
+
+Related Work
+------------
+
+Related work for sharding (motivation for storage transformers): \*
+Neuroglancer precomputed format supports sharding:
+https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/sharded.md
+\* webKnossos-wrap, blocks correspond to Zarr chunks, files to shards:
+https://github.com/scalableminds/webknossos-wrap#high-level-description
+\* caterva, blocks correspond to Zarr chunks, caterva chunks to Zarr
+shards:
+https://caterva.readthedocs.io/en/latest/getting_started/overview.html
+\* Apache Arrow supports data partitioning:
+https://arrow.apache.org/docs/python/dataset.html#reading-partitioned-data
+
+Implementation
+--------------
+
+Support for Zarr v3 in ``zarr-python`` is in progress, updating to the
+current spec is tracked in
+https://github.com/zarr-developers/zarr-python/issues/1290.
+
+Discussion
+----------
+
+1. Discussions around storage transformers:
+
+   -  https://github.com/zarr-developers/zarr-specs/pull/134
+
+2. Discussions around sharding:
+
+   -  For the specification:
+
+      -  https://github.com/zarr-developers/zarr-specs/issues/127
+      -  https://github.com/zarr-developers/zarr-specs/pull/134
+
+   -  Initial issue in ``zarr-python``:
+
+      -  https://github.com/zarr-developers/zarr-python/issues/877
+
+   -  Different prototype implementations:
+
+      -  https://github.com/alimanfoo/zarrita/pull/40
+      -  https://github.com/zarr-developers/zarr-python/pull/876
+      -  https://github.com/zarr-developers/zarr-python/pull/947
+
+   -  Other related discussions:
+
+      -  https://forum.image.sc/t/ome-zarr-chunking-questions/66794
+      -  https://forum.image.sc/t/sharding-support-in-ome-zarr/55409
+      -  https://forum.image.sc/t/deciding-on-optimal-chunk-size/63023
+      -  https://github.com/thewtex/shardedstore/issues/17
+
+3. Discussion around Zarr V3 Protocol:
+
+   -  Issues in ``zarr-specs``:
+
+      -  ZEP1 project board:
+
+         -  https://github.com/orgs/zarr-developers/projects/2
+
+      -  Zarr V3 Mission:
+
+         -  https://github.com/zarr-developers/zarr-specs/issues/140
+
+      -  Zarr V3 Implementation(Zarrita):
+
+         -  https://github.com/zarr-developers/zarr-specs/issues/84
+
+      -  Content-addressable Storage Transformer for Zarr V3:
+
+         -  https://github.com/zarr-developers/zarr-specs/issues/82
+
+      -  Additional discussions related to Zarr V3:
+
+         -  https://github.com/zarr-developers/zarr-specs/issues/53
+         -  https://github.com/zarr-developers/zarr-specs/issues/13
+
+   -  PRs in ``zarr-specs``:
+
+      -  Zarr V3 Protocol Development Branch:
+
+         -  https://github.com/zarr-developers/zarr-specs/pull/16
+
+      -  Zarr V3 Conceptual Model, Data Types, Chunks layouts, Codecs
+         and other important changes:
+
+         -  https://github.com/zarr-developers/zarr-specs/pull/17
+         -  https://github.com/zarr-developers/zarr-specs/pull/18
+         -  https://github.com/zarr-developers/zarr-specs/pull/22
+         -  https://github.com/zarr-developers/zarr-specs/pull/24
+         -  https://github.com/zarr-developers/zarr-specs/pull/25
+         -  https://github.com/zarr-developers/zarr-specs/pull/27
+         -  https://github.com/zarr-developers/zarr-specs/pull/28
+         -  https://github.com/zarr-developers/zarr-specs/pull/29
+         -  https://github.com/zarr-developers/zarr-specs/pull/30
+         -  https://github.com/zarr-developers/zarr-specs/pull/32
+         -  https://github.com/zarr-developers/zarr-specs/pull/35
+
+      -  Additional changes to Zarr V3 Protocol:
+
+         -  https://github.com/zarr-developers/zarr-specs/pull/54
+         -  https://github.com/zarr-developers/zarr-specs/pull/143
+         -  https://github.com/zarr-developers/zarr-specs/pull/146
+
+References and Footnotes
+------------------------
+
+-   [ZARR2SPEC] - https://zarr.readthedocs.io/en/stable/spec/v2.html
+
+Contributors
+------------
+
+Here’s a list of humans who contributed to the ZEP0001 (V3
+Specification) by developing, reviewing, proof-reading, and testing it:
+
+-  `Anderson Banihirwe <https://github.com/andersy005>`__
+-  `Andrew Champion <https://github.com/aschampion>`__
+-  `Chris Barnes <https://github.com/clbarnes>`__
+-  `Constantine Pape <https://github.com/constantinpape>`__
+-  `David Brochart <https://github.com/davidbrochart>`__
+-  `Davis Bennett <https://github.com/d-v-b/>`__
+-  `Dennis Heimbigner <https://github.com/DennisHeimbigner>`__
+-  `Elliot Sales De Andrade <https://github.com/qulogic>`__
+-  `Ethan Davis <https://github.com/ethanrd>`__
+-  `Even Rouault <https://github.com/rouault>`__
+-  `Fabian Gans <https://github.com/meggart>`__
+-  `Gregory Lee <https://github.com/grlee77>`__
+-  `Isaac Virshup <https://github.com/ivirshup>`__
+-  `James Bourbeau <https://github.com/jrbourbeau>`__
+-  `Jim Pivarski <https://github.com/jpivarski>`__
+-  `John A. Kirkham <https://github.com/jakirkham>`__
+-  `John Bogovic <https://github.com/bogovicj>`__
+-  `Josh Moore <https://github.com/joshmoore/>`__
+-  `Mark Kittisopikul <https://github.com/mkitti>`__
+-  `Martin Durrant <https://github.com/martindurant>`__
+-  `Matthias Bussonnier <https://github.com/Carreau>`__
+-  `Norman Rzepka <https://github.com/normanrz>`__
+-  `Ryan Abernathey <https://github.com/rabernat/>`__
+-  `Ryan Williams <https://github.com/ryan-williams>`__
+-  `Sanket Verma <https://github.com/MSanKeys963/>`__
+-  `Stephan Saalfeld <https://github.com/axtimwalde>`__
+-  `Theo McCaie <https://github.com/tam203>`__
+-  `Trevor Manz <https://github.com/manzt>`__
+-  `Ward Fisher <https://github.com/wardf>`__
+
+License
+-------
+
+.. raw:: html
+
+   <p xmlns:dct="http://purl.org/dc/terms/">
+
+To the extent possible under law, the authors have waived all copyright
+and related or neighboring rights to ZEP 1.
+
+.. raw:: html
+
+   </p>

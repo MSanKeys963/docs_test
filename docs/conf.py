@@ -18,7 +18,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Zarr specs'
-copyright = '2019, Zarr Developers'
+copyright = '2024, Zarr Developers'
 author = 'Zarr Developers'
 
 
@@ -86,7 +86,3 @@ suppress_warnings = [
     # suppress "duplicate citation" warnings
     'ref.citation',
 ]
-
-redirects = {
-    "index": "specs.html",
-}
